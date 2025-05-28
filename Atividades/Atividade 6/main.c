@@ -73,6 +73,8 @@ void atualizar_lcd(uint8_t valor) {
     lcd_i2c_print(&lcd, "Hex: 0x%X", valor);
 
     lcd_i2c_cursor_set(&lcd, 0, 1);
+    lcd_i2c_print(&lcd, "Dec:     "); //evitar casos como 10 para 9 -> visor 90 e 15 para 0 -> visor 05
+    lcd_i2c_cursor_set(&lcd, 0, 1);
     lcd_i2c_print(&lcd, "Dec: %d", valor);
 }
 
