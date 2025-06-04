@@ -70,12 +70,25 @@ int ler_temperatura_ntc() {
 }
 
 void atualizar_leds(int temperatura, int limite) {
-    int diff = limite - temperatura;
+    int64_t agora = esp_timer_get_time();
     bool alarme = temperatura >= limite;
-    gpio_set_level(GPIO_LED1, alarme || diff <= 20);
-    gpio_set_level(GPIO_LED2, alarme || diff <= 15);
-    gpio_set_level(GPIO_LED3, alarme || diff <= 10);
-    gpio_set_level(GPIO_LED4, alarme || diff <= 5);
+
+    if (alarme) {
+        if (agora - ultimo_pisca_time > 500000) { // 500ms
+            ultimo_pisca_time = agora;
+            estado_pisca = !estado_pisca;
+        }
+        gpio_set_level(GPIO_LED1, estado_pisca);
+        gpio_set_level(GPIO_LED2, estado_pisca);
+        gpio_set_level(GPIO_LED3, estado_pisca);
+        gpio_set_level(GPIO_LED4, estado_pisca);
+    } else {
+        int diff = limite - temperatura;
+        gpio_set_level(GPIO_LED1, diff <= 20);
+        gpio_set_level(GPIO_LED2, diff <= 15);
+        gpio_set_level(GPIO_LED3, diff <= 10);
+        gpio_set_level(GPIO_LED4, diff <= 5);
+    }
 }
 
 void configurar_buzzer() {
