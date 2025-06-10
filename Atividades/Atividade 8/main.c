@@ -160,18 +160,7 @@ void configurar_botoes() {
     gpio_isr_handler_add(GPIO_BTN_DEC, isr_btn_dec, NULL);
 }
 
-void configurar_sdcard() {
-    esp_vfs_fat_sdmmc_mount_config_t mount_config = {
-        .format_if_mount_failed = true,
-        .max_files = 5,
-        .allocation_unit_size = 16 * 1024
-    };
-
-    const char mount_point[] = "/sdcard";
-
-    sdmmc_host_t host = SDSPI_HOST_DEFAULT();
-    host.slot = SPI2_HOST;
-
+void iniciar_sdcard() {
     spi_bus_config_t bus_cfg = {
         .mosi_io_num = PIN_NUM_MOSI,
         .miso_io_num = PIN_NUM_MISO,
@@ -181,58 +170,75 @@ void configurar_sdcard() {
         .max_transfer_sz = 4000
     };
 
-    esp_err_t ret = spi_bus_initialize(host.slot, &bus_cfg, SPI_DMA_CH_AUTO);
+    esp_err_t ret = spi_bus_initialize(SPI2_HOST, &bus_cfg, SDSPI_DEFAULT_DMA);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Erro ao inicializar SPI: %s", esp_err_to_name(ret));
+        ESP_LOGE("SDCARD", "Falha ao inicializar SPI (%s)", esp_err_to_name(ret));
         return;
     }
+
+    esp_vfs_fat_sdmmc_mount_config_t mount_config = {
+        .format_if_mount_failed = true,
+        .max_files = 5,
+        .allocation_unit_size = 16 * 1024
+    };
+
+    sdmmc_host_t host = SDSPI_HOST_DEFAULT();
+    host.slot = SPI2_HOST;
 
     sdspi_device_config_t slot_config = SDSPI_DEVICE_CONFIG_DEFAULT();
     slot_config.gpio_cs = PIN_NUM_CS;
     slot_config.host_id = host.slot;
+    slot_config.gpio_cd = -1;
 
-    ret = esp_vfs_fat_sdspi_mount(mount_point, &host, &slot_config, &mount_config, &card);
+    ret = esp_vfs_fat_sdspi_mount("/sdcard", &host, &slot_config, &mount_config, &card);
+
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Erro ao montar cartão SD: %s", esp_err_to_name(ret));
-        return;
-    }
-
-    ESP_LOGI(TAG, "Cartão SD montado com sucesso");
-
-    // Verificar se o ponto de montagem existe
-    struct stat st;
-    if (stat(mount_point, &st) != 0) {
-        ESP_LOGE(TAG, "Ponto de montagem %s não existe!", mount_point);
-        return;
-    }
-
-    // Tenta abrir o arquivo uma única vez
-    char path[64];
-    snprintf(path, sizeof(path), "%s/temperaturas.txt", mount_point);
-    FILE* test = fopen(path, "a+");
-    if (test) {
-        fclose(test);
-        arquivo = fopen(path, "a");
-        if (arquivo) {
-            ESP_LOGI(TAG, "Arquivo '%s' aberto com sucesso", path);
-        } else {
-           ESP_LOGE(TAG, "Falha ao reabrir arquivo '%s' para escrita", path);
-        }
+        ESP_LOGE("SDCARD", "Falha ao montar o cartão SD (%s)", esp_err_to_name(ret));
     } else {
-        ESP_LOGE(TAG, "Falha ao criar/testar arquivo '%s'", path);
+        ESP_LOGI("SDCARD", "Cartão SD montado com sucesso");
     }
 }
 
-void salvar_leitura_sd(int temp) {
-    if (!arquivo) {
-        ESP_LOGW(TAG, "Tentativa de escrita sem arquivo aberto");
+
+void salvar_leitura_sd(int temperatura, int limite) {
+    static int ultima_temp = -999;
+    static int ultimo_limite = -999;
+    static int contador = 0;
+
+    if (temperatura == ultima_temp && limite == ultimo_limite) return;
+
+    FILE *f = fopen("/sdcard/leituras.txt", "a");
+    if (f == NULL) {
+        ESP_LOGE("SDCARD", "Erro ao abrir arquivo");
         return;
     }
 
-    int64_t tempo = esp_timer_get_time() / 1000;
-    fprintf(arquivo, "Tempo: %lldms - Temp: %d C\n", tempo, temp);
-    fflush(arquivo);
+    contador++;
+    fprintf(f, "Leitura #%d | Temp: %d °C | Alarme: %d °C\n", contador, temperatura, limite);
+    fclose(f);
+
+    ultima_temp = temperatura;
+    ultimo_limite = limite;
+    ESP_LOGI("SDCARD", "Leitura salva no SD");
 }
+
+void ler_arquivo_sd() {
+    FILE *f = fopen("/sdcard/leituras.txt", "r");
+    if (f == NULL) {
+        ESP_LOGE("SDCARD", "Erro ao abrir arquivo para leitura");
+        return;
+    }
+
+    char linha[128];
+    ESP_LOGI("SDCARD", "--- Conteúdo do arquivo ---");
+    while (fgets(linha, sizeof(linha), f)) {
+        printf("%s", linha);
+    }
+    ESP_LOGI("SDCARD", "--- Fim do arquivo ---");
+
+    fclose(f);
+}
+
 
 void app_main(void) {
     gpio_set_direction(GPIO_LED1, GPIO_MODE_OUTPUT);
@@ -243,7 +249,7 @@ void app_main(void) {
     configurar_lcd();
     configurar_botoes();
     configurar_buzzer();
-    configurar_sdcard();
+    iniciar_sdcard();
 
     fila_eventos = xQueueCreate(10, sizeof(evento_t));
 
@@ -270,7 +276,8 @@ void app_main(void) {
         atualizar_leds(temperatura, temp_alarme);
         ativar_buzzer(temperatura >= temp_alarme);
         atualizar_lcd(temperatura, temp_alarme);
-        salvar_leitura_sd(temperatura);
+        salvar_leitura_sd(temperatura, temp_alarme);
+        ler_arquivo_sd();  // para conferir se tava funcionando o .txt
 
         vTaskDelay(pdMS_TO_TICKS(500));
     }
